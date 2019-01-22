@@ -13,7 +13,7 @@ def get_driver(headless: bool =False) -> Chrome:
     options = ChromeOptions()
 
     capabilities = DesiredCapabilities.CHROME
-    # options.add_argument("--window-position=1920,50")
+    options.add_argument("--window-position=1920,50")
     options.add_argument("--window-size=1920,1000")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
@@ -24,15 +24,18 @@ def get_driver(headless: bool =False) -> Chrome:
                   desired_capabilities=capabilities)
 
 
-def parse_bidding_row(bidding_row: WebElement):
-    bidding_row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').click()
 
 
 def parse_bidding_list_cut(driver: Chrome):
     bidding_rows = driver.find_elements_by_xpath("//table[@class='bank']//tbody/tr")[1:]
+    cur_win = driver.current_window_handle
 
     for row in bidding_rows:
-        parse_bidding_row(row)
+        row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').send_keys(Keys.CONTROL + Keys.ENTER)
+
+        
+    driver.switch_to.window(cur_win)
+
 
 
 def run(*args):
