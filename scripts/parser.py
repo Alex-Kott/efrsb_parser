@@ -13,7 +13,7 @@ def get_driver(headless: bool =False) -> Chrome:
     options = ChromeOptions()
 
     capabilities = DesiredCapabilities.CHROME
-    options.add_argument("--window-position=1920,50")
+    # options.add_argument("--window-position=1920,50")
     options.add_argument("--window-size=1920,1000")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
@@ -24,17 +24,22 @@ def get_driver(headless: bool =False) -> Chrome:
                   desired_capabilities=capabilities)
 
 
-
-
 def parse_bidding_list_cut(driver: Chrome):
     bidding_rows = driver.find_elements_by_xpath("//table[@class='bank']//tbody/tr")[1:]
     cur_win = driver.current_window_handle
 
+    page_links = []
     for row in bidding_rows:
-        row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').send_keys(Keys.CONTROL + Keys.ENTER)
+        href = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').get_attribute('href')
+        page_links.append(href)
+        print(href)
+
+    # for tab in driver.window_handles[1:]:
+    #     driver.switch_to.window(tab)
+    #     driver.close()
 
         
-    driver.switch_to.window(cur_win)
+    # driver.switch_to.window(cur_win)
 
 
 
@@ -47,7 +52,9 @@ def run(*args):
         pager = driver.find_element_by_class_name('pager')
         try:
             pager.find_element_by_xpath(f'//tr[@class="pager"]//a[text()="{page_number}"]').click()
+            print(f"go to {page_number} page")
 
+            sleep(0.5)
             parse_bidding_list_cut(driver)
         except NoSuchElementException:
             pager.find_elements_by_tag_name('a')[-1].click()
