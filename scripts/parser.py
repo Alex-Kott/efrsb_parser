@@ -1,7 +1,9 @@
 import logging
 import os
 from time import sleep
+from typing import List
 
+import validators
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver import Chrome, ChromeOptions, DesiredCapabilities
@@ -34,17 +36,15 @@ def get_driver(headless: bool =False) -> Chrome:
 
 def parse_bidding_list_cut(driver: Chrome):
     bidding_rows = driver.find_elements_by_xpath("//table[@class='bank']//tbody/tr")[1:]
-    cur_win = driver.current_window_handle
 
     page_links = []
     for row in bidding_rows:
         try:
-            href = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').get_attribute('href')
-            page_links.append(href)
-            print(href)
+            href_value = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').get_attribute('href')
+            if validators.url(href_value):
+                page_links.append(href_value)
         except Exception as e:
             print(row.get_attribute('outerHTML'))
-            print('\n\n')
 
     return page_links
 
@@ -54,16 +54,8 @@ def get_current_page_number(driver: Chrome) -> int:
     return int(driver.find_element_by_xpath(f'//tr[@class="pager"]//span').text)
 
 
-def get_bidding_links(driver: Chrome):
-    pass
-
-
-def run(*args):
-    driver = get_driver(headless=('headless' in args))
-    driver.get(EFRSB_URL)
-
+def get_bidding_links(driver: Chrome) -> List[str]:
     page_number = 2
-
     bidding_links = []
     while True:
         bidding_links.extend(parse_bidding_list_cut(driver))
@@ -79,16 +71,33 @@ def run(*args):
             else:
                 break
 
+        # здесь fact_page_number - это фактический номер страницы,
+        # в то время как просто page_number - это рассчётный номер
         fact_page_number = get_current_page_number(driver)
         logger.info(f'Current page: {fact_page_number}')
 
         page_number += 1
         sleep(1)
 
+        break  # !!! пока смотрим только первую страницу
+
+    return bidding_links
+
+
+def parse_biddings(driver: Chrome, bidding_links: List[str]):
     for link in bidding_links:
         print(link)
         driver.get(link)
         sleep(1)
+
+
+def run(*args):
+    driver = get_driver(headless=('headless' in args))
+    driver.get(EFRSB_URL)
+
+    bidding_links = get_bidding_links(driver)
+    parse_biddings(driver, bidding_links)
+
 
     driver.close()
 
