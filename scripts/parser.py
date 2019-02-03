@@ -1,9 +1,11 @@
 import logging
 import os
 from time import sleep
-from typing import List
+from typing import List, Dict
 
 import validators
+from furl import furl
+from pymongo import MongoClient
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver import Chrome, ChromeOptions, DesiredCapabilities
@@ -19,11 +21,11 @@ logger = logging.getLogger('efrsb_parser')
 logger.setLevel(logging.INFO)
 
 
-def get_driver(headless: bool =False) -> Chrome:
+def get_driver(headless: bool = False) -> Chrome:
     options = ChromeOptions()
 
     capabilities = DesiredCapabilities.CHROME
-    options.add_argument("--window-position=1920,50")
+    # options.add_argument("--window-position=1920,50")
     options.add_argument("--window-size=1920,1000")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
@@ -34,11 +36,11 @@ def get_driver(headless: bool =False) -> Chrome:
                   desired_capabilities=capabilities)
 
 
-def parse_bidding_list_cut(driver: Chrome):
-    bidding_rows = driver.find_elements_by_xpath("//table[@class='bank']//tbody/tr")[1:]
+def parse_trade_list_cut(driver: Chrome):
+    trade_rows = driver.find_elements_by_xpath("//table[@class='bank']//tbody/tr")[1:]
 
     page_links = []
-    for row in bidding_rows:
+    for row in trade_rows:
         try:
             href_value = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').get_attribute('href')
             if validators.url(href_value):
@@ -50,15 +52,14 @@ def parse_bidding_list_cut(driver: Chrome):
 
 
 def get_current_page_number(driver: Chrome) -> int:
-
     return int(driver.find_element_by_xpath(f'//tr[@class="pager"]//span').text)
 
 
-def get_bidding_links(driver: Chrome) -> List[str]:
+def get_trade_links(driver: Chrome) -> List[str]:
     page_number = 2
-    bidding_links = []
+    trade_links = []
     while True:
-        bidding_links.extend(parse_bidding_list_cut(driver))
+        trade_links.extend(parse_trade_list_cut(driver))
 
         pager = driver.find_element_by_class_name('pager')
         try:
@@ -81,13 +82,56 @@ def get_bidding_links(driver: Chrome) -> List[str]:
 
         break  # !!! пока смотрим только первую страницу
 
-    return bidding_links
+    return trade_links
 
 
-def parse_biddings(driver: Chrome, bidding_links: List[str]):
-    for link in bidding_links:
-        print(link)
-        driver.get(link)
+def save_trade(trade_card: Dict[str, str]):
+    client = MongoClient(port=27017)
+    db = client.trade_card
+
+    db.insert_one(trade_card)
+
+
+def parse_trade(driver: Chrome, link: str):
+    logger.info(f"Parsing card: {link}")
+    driver.get(link)
+
+    trade_card = {}
+    trade_card_id = furl(link).query.params['ID']
+    trade_card['ID'] = trade_card_id
+
+    trade_info_table = driver.find_element_by_id("ctl00_cphBody_tableTradeInfo")
+    for tr in trade_info_table.find_elements_by_tag_name('tr'):
+        cells = tr.find_elements_by_tag_name('td')
+        field_name = cells[0].get_attribute('innerText')
+        field_value = cells[1].get_attribute('innerText')
+        trade_card[field_name] = field_value
+
+    trade_lot_info = driver.find_element_by_id('ctl00_cphBody_lvLotList_ctrl0_tblTradeLot')
+    for tr in trade_lot_info.find_elements_by_tag_name('tr'):
+        cells = tr.find_elements_by_tag_name('td')
+        if len(cells) == 2:
+            field_name = cells[0].get_attribute('innerText')
+            field_value = cells[1].get_attribute('innerText')
+        elif len(cells) == 1:
+            field_name = cells[0].find_element_by_tag_name('b').get_attribute('innerText')
+            field_value = cells[0].find_element_by_tag_name('div').get_attribute('innerText')
+        else:
+            logger.warning(f'Wrango amount of cells: {link}')
+            continue
+        if field_name == '':
+            logger.warning(f'field_name is empty: field_name == {field_name}, field_value == {field_value}')
+
+        trade_card[field_name] = field_value
+
+    return trade_card
+
+
+def parse_trades(driver: Chrome, trade_links: List[str]):
+    for link in trade_links:
+        trade_card = parse_trade(driver, link)
+        save_trade(trade_card)
+
         sleep(1)
 
 
@@ -95,9 +139,8 @@ def run(*args):
     driver = get_driver(headless=('headless' in args))
     driver.get(EFRSB_URL)
 
-    bidding_links = get_bidding_links(driver)
-    parse_biddings(driver, bidding_links)
-
+    trade_links = get_trade_links(driver)
+    parse_trades(driver, trade_links)
 
     driver.close()
 
