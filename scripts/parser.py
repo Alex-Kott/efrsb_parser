@@ -86,10 +86,22 @@ def get_trade_links(driver: Chrome) -> List[str]:
 
 
 def save_trade(trade_card: Dict[str, str]):
-    client = MongoClient(port=27017)
-    db = client.trade_card
+    client = MongoClient('localhost:27017')
+    db = client['EFRSB']
 
-    db.insert_one(trade_card)
+    trade_cards = db.trade_cards
+
+    trade_cards.insert_one(trade_card)
+
+
+def parse_field_value(cell: WebElement):
+    content_tables = cell.find_elements_by_tag_name('table')
+    if content_tables:
+        content_table = content_tables[0]
+        elem = content_table.find_element_by_tag_name('td')
+        return elem.get_attribute('innerText')
+    else:
+        return cell.get_attribute('innerText')
 
 
 def parse_trade(driver: Chrome, link: str):
@@ -100,12 +112,21 @@ def parse_trade(driver: Chrome, link: str):
     trade_card_id = furl(link).query.params['ID']
     trade_card['ID'] = trade_card_id
 
+    print(f"\n\n{link}")
+
     trade_info_table = driver.find_element_by_id("ctl00_cphBody_tableTradeInfo")
     for tr in trade_info_table.find_elements_by_tag_name('tr'):
         cells = tr.find_elements_by_tag_name('td')
+        if len(cells) > 2:
+            for i in cells:
+                print(i.get_attribute('innerHTML'))
         field_name = cells[0].get_attribute('innerText')
-        field_value = cells[1].get_attribute('innerText')
+        field_value = parse_field_value(cells[1])
         trade_card[field_name] = field_value
+
+        # print(f"GGGGG: {field_name}")
+
+
 
     trade_lot_info = driver.find_element_by_id('ctl00_cphBody_lvLotList_ctrl0_tblTradeLot')
     for tr in trade_lot_info.find_elements_by_tag_name('tr'):
@@ -119,6 +140,7 @@ def parse_trade(driver: Chrome, link: str):
         else:
             logger.warning(f'Wrango amount of cells: {link}')
             continue
+        # print(field_name)
         if field_name == '':
             logger.warning(f'field_name is empty: field_name == {field_name}, field_value == {field_value}')
 
