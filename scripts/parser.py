@@ -1,7 +1,6 @@
 import logging
-import os
 from time import sleep
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 import validators
 from furl import furl
@@ -10,6 +9,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver import Chrome, ChromeOptions, DesiredCapabilities
 from selenium.webdriver.remote.webelement import WebElement
+
+from efrsb_parser.settings import MONGO_HOST, MONGO_PORT
 
 EFRSB_URL = 'https://bankrot.fedresurs.ru/TradeList.aspx'
 
@@ -25,7 +26,7 @@ def get_driver(headless: bool = False) -> Chrome:
     options = ChromeOptions()
 
     capabilities = DesiredCapabilities.CHROME
-    # options.add_argument("--window-position=1920,50")
+    options.add_argument("--window-position=1920,50")
     options.add_argument("--window-size=1920,1000")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
@@ -42,7 +43,8 @@ def parse_trade_list_cut(driver: Chrome):
     page_links = []
     for row in trade_rows:
         try:
-            href_value = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a').get_attribute('href')
+            href_value = row.find_elements_by_tag_name('td')[5].find_element_by_tag_name('a')\
+                                                               .get_attribute('href')
             if validators.url(href_value):
                 page_links.append(href_value)
         except Exception as e:
@@ -85,74 +87,79 @@ def get_trade_links(driver: Chrome) -> List[str]:
     return trade_links
 
 
-def save_trade(trade_card: Dict[str, str]):
-    client = MongoClient('localhost:27017')
+def save_trade_card(trade_card: Dict[str, str]):
+    client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)
     db = client['EFRSB']
 
     trade_cards = db.trade_cards
-
     trade_cards.insert_one(trade_card)
 
 
-def parse_field_value(cell: WebElement):
-    content_tables = cell.find_elements_by_tag_name('table')
-    if content_tables:
-        content_table = content_tables[0]
-        elem = content_table.find_element_by_tag_name('td')
-        return elem.get_attribute('innerText')
+def parse_row(tr: WebElement) -> Tuple[str, str]:
+    """Use for parsing trade card or lot card"""
+    cells = tr.find_elements_by_xpath('./td')
+    if len(cells) == 2:
+        field_name = cells[0].get_attribute('innerText').replace('.', ' ').strip()
+
+        inner_tables = cells[1].find_elements_by_tag_name('table')
+        if inner_tables:
+            '''Бывает, что ячейка содержит историю изменений в виде table '''
+            field_value = inner_tables[0].find_element_by_tag_name('td').get_attribute('innerText')
+        else:
+            field_value = cells[1].get_attribute('innerText')
+    elif len(cells) == 1:
+        field_name = cells[0].find_element_by_tag_name('b').get_attribute('innerText').strip()
+        field_value = cells[0].find_element_by_tag_name('div').get_attribute('innerText')
     else:
-        return cell.get_attribute('innerText')
+        raise ValueError(f'Wrang amount of cells')
+
+    return field_name, field_value
 
 
-def parse_trade(driver: Chrome, link: str):
+def parse_lots(driver: Chrome, trade_card_id) -> List[dict]:
+    lots = []
+    for lot_div in driver.find_elements_by_xpath('//*[@id="ctl00_cphBody_rpvLots"]/div'):
+        lot = {'TRADE_CARD_ID': trade_card_id}
+        for tr in lot_div.find_elements_by_xpath('./table//tr'):
+            field_name, field_value = parse_row(tr)
+
+            if field_name == '' and field_value != '':
+                raise ValueError(f'field_name is empty: {tr.get_attribute("outerHTML")}')
+
+            if field_name != '':
+                lot[field_name] = field_value
+
+        lots.append(lot)
+
+    return lots
+
+
+def parse_trade_card(driver: Chrome, link: str):
     logger.info(f"Parsing card: {link}")
     driver.get(link)
 
     trade_card = {}
     trade_card_id = furl(link).query.params['ID']
-    trade_card['ID'] = trade_card_id
+    trade_card['id'] = trade_card_id
 
     print(f"\n\n{link}")
-
-    trade_info_table = driver.find_element_by_id("ctl00_cphBody_tableTradeInfo")
-    for tr in trade_info_table.find_elements_by_tag_name('tr'):
-        cells = tr.find_elements_by_tag_name('td')
-        if len(cells) > 2:
-            for i in cells:
-                print(i.get_attribute('innerHTML'))
-        field_name = cells[0].get_attribute('innerText')
-        field_value = parse_field_value(cells[1])
+    for tr in driver.find_elements_by_xpath('//*[@id="ctl00_cphBody_tableTradeInfo"]/tbody/tr'):
+        field_name, field_value = parse_row(tr)
         trade_card[field_name] = field_value
 
-        # print(f"GGGGG: {field_name}")
+    lot_list = parse_lots(driver, trade_card_id)
+
+    return trade_card, lot_list
 
 
-
-    trade_lot_info = driver.find_element_by_id('ctl00_cphBody_lvLotList_ctrl0_tblTradeLot')
-    for tr in trade_lot_info.find_elements_by_tag_name('tr'):
-        cells = tr.find_elements_by_tag_name('td')
-        if len(cells) == 2:
-            field_name = cells[0].get_attribute('innerText')
-            field_value = cells[1].get_attribute('innerText')
-        elif len(cells) == 1:
-            field_name = cells[0].find_element_by_tag_name('b').get_attribute('innerText')
-            field_value = cells[0].find_element_by_tag_name('div').get_attribute('innerText')
-        else:
-            logger.warning(f'Wrango amount of cells: {link}')
-            continue
-        # print(field_name)
-        if field_name == '':
-            logger.warning(f'field_name is empty: field_name == {field_name}, field_value == {field_value}')
-
-        trade_card[field_name] = field_value
-
-    return trade_card
-
-
-def parse_trades(driver: Chrome, trade_links: List[str]):
+def parse_trade_cards(driver: Chrome, trade_links: List[str]):
     for link in trade_links:
-        trade_card = parse_trade(driver, link)
-        save_trade(trade_card)
+        try:
+            trade_card, lots = parse_trade_card(driver, link)
+            save_trade_card(trade_card)
+        except Exception as e:
+            logger.exception(e)
+            raise e
 
         sleep(1)
 
@@ -162,7 +169,7 @@ def run(*args):
     driver.get(EFRSB_URL)
 
     trade_links = get_trade_links(driver)
-    parse_trades(driver, trade_links)
+    parse_trade_cards(driver, trade_links)
 
     driver.close()
 
