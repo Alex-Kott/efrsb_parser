@@ -91,8 +91,10 @@ def save_trade_card(trade_card: Dict[str, str]):
     client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)
     db = client['EFRSB']
 
-    trade_cards = db.trade_cards
-    trade_cards.insert_one(trade_card)
+    result = db.trade_cards.update_one({'id': trade_card['id']}, {'$set': trade_card}, upsert=True)
+    print(result.raw_result)
+    print(result.upserted_id)
+    print(result.matched_count)
 
 
 def parse_row(tr: WebElement) -> Tuple[str, str]:
